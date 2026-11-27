@@ -39,7 +39,9 @@ Needs Node 20+ and a browser with WebGL2.
 4. The luminance picks a glyph from a font atlas: a canvas texture whose tiles are exactly one cell in device pixels. The browser rasterises each glyph at its final size, and the shader fetches it texel-for-texel, so characters stay crisp at any cell size or display scaling. The atlas is rebuilt when the cell size, pixel ratio or glyph set changes. Glyphs are sorted by measured ink coverage, so any character set you type maps sparse to dense automatically.
 5. The glyph mask is tinted with the cell's saturated scene colour. A small amount of the raw colour bleeds through behind the glyphs, and a soft halo from a blurred mip blooms behind bright areas like the waterfall and lights.
 
-The debug panel (G) tunes all of this live: cell size, 3D render scale, glyph preset or custom glyph string, contrast, saturation, brightness curve, gain, background bleed, highlight detail, shimmer, exposure, glow, fog density, and a switch to turn the ASCII pass off and compare with the raw scene. On a slow GPU, drop **3D render scale** to 0.5. Glyph cells average several pixels anyway, so it costs little visually and cuts the 3D fill work about 4×.
+The debug panel (G) tunes all of this live: cell size, 3D render scale, glyph preset or custom glyph string, contrast, saturation, brightness curve, gain, background bleed, highlight detail, shimmer, exposure, glow, fog density, and a switch to turn the ASCII pass off and compare with the raw scene. **Auto resolution** (on by default) lowers the 3D render scale in 15% steps, down to 40%, whenever a 1.5-second window averages under 45 fps. Glyph cells average several pixels anyway, so this costs little visually. The panel also shows the fps and which GPU the browser is using. If that's an integrated GPU on a machine with a dedicated card, set the browser to "High performance" in Windows Settings → System → Display → Graphics.
+
+Grass is split into 16 m tiles, so tiles outside the camera's view are skipped each frame.
 
 ## Code layout
 

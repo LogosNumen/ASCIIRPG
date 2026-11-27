@@ -75,6 +75,8 @@ const hooks = {
     if (player.invuln > 0 || mode !== 'play') return;
     state.hp -= dmg;
     player.invuln = 0.5;
+    player.hurt();
+    cam.addShake(0.35);
     ui.hurt();
     if (state.hp <= 0) die();
   },
@@ -86,7 +88,9 @@ const hooks = {
     if (S.addXp(state, v) > 0) ui.toast(`LEVEL UP  ·  LV ${state.level}  ·  +15 HP  +4 ATK`, 3200);
     persist();
   },
+  onShake: (a) => cam.addShake(a),
 };
+let hitStop = 0; // brief freeze when the sword connects, so hits feel heavy
 
 function die() {
   mode = 'dead';
@@ -118,8 +122,12 @@ function gameplay(dt, t) {
     ui.prompt(null);
     return;
   }
+  if (hitStop > 0) { hitStop -= dt; dt *= 0.08; }
   const strike = player.update(dt, input, cam.yaw, world.colliders);
-  if (strike) enemies.strike(strike, state.atk, hooks);
+  if (strike && enemies.strike(strike, state.atk, hooks) > 0) {
+    hitStop = 0.07;
+    cam.addShake(0.18);
+  }
   enemies.update(dt, t, player, hooks);
   if (mode !== 'play') return;
 
@@ -167,7 +175,9 @@ resize();
 const timer = new THREE.Timer();
 renderer.setAnimationLoop((ts) => {
   timer.update(ts);
-  const dt = Math.min(timer.getDelta(), 1 / 20);
+  const raw = timer.getDelta();
+  ascii.adapt(raw);
+  const dt = Math.min(raw, 1 / 20);
   shared.uTime.value += dt;
   const t = shared.uTime.value;
   if (mode === 'play' && (input.locked || forceActive) && !debug.open) {

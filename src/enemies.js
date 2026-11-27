@@ -17,23 +17,24 @@ function add(parent, geo, mat, x, y, z) {
 
 function buildGolem() {
   const g = new THREE.Group();
+  const body = new THREE.Group(); // torso, head and arms: bobs and leans over the legs
+  g.add(body);
   const mat = new THREE.MeshLambertMaterial({ color: 0x5f656d, flatShading: true });
-  add(g, new THREE.DodecahedronGeometry(1, 0), mat, 0, 1.45, 0).scale.set(1.1, 1, 0.9);
-  add(g, new THREE.DodecahedronGeometry(0.5, 0), mat, 0, 2.55, 0.1);
-  add(g, new THREE.BoxGeometry(0.5, 0.8, 0.5), mat, -0.45, 0.4, 0);
-  add(g, new THREE.BoxGeometry(0.5, 0.8, 0.5), mat, 0.45, 0.4, 0);
+  add(body, new THREE.DodecahedronGeometry(1, 0), mat, 0, 1.45, 0).scale.set(1.1, 1, 0.9);
+  add(body, new THREE.DodecahedronGeometry(0.5, 0), mat, 0, 2.55, 0.1);
+  const legs = [-1, 1].map((s) => add(g, new THREE.BoxGeometry(0.5, 0.8, 0.5), mat, s * 0.45, 0.4, 0));
   const arms = [-1, 1].map((s) => {
     const pivot = new THREE.Group();
     pivot.position.set(s * 1.15, 1.9, 0);
-    g.add(pivot);
+    body.add(pivot);
     add(pivot, new THREE.DodecahedronGeometry(0.48, 0), mat, 0, -0.7, 0);
     return pivot;
   });
   const ember = glowMat(4, 1.6, 0.4);
-  add(g, new THREE.SphereGeometry(0.22, 6, 4), ember, 0, 1.5, 0.82);
-  add(g, new THREE.BoxGeometry(0.12, 0.07, 0.05), ember, -0.17, 2.6, 0.5);
-  add(g, new THREE.BoxGeometry(0.12, 0.07, 0.05), ember, 0.17, 2.6, 0.5);
-  return { group: g, mat, arms };
+  add(body, new THREE.SphereGeometry(0.22, 6, 4), ember, 0, 1.5, 0.82);
+  add(body, new THREE.BoxGeometry(0.12, 0.07, 0.05), ember, -0.17, 2.6, 0.5);
+  add(body, new THREE.BoxGeometry(0.12, 0.07, 0.05), ember, 0.17, 2.6, 0.5);
+  return { group: g, mat, body, arms, legs };
 }
 
 function buildShade() {
@@ -43,11 +44,18 @@ function buildShade() {
   g.add(body);
   add(body, new THREE.ConeGeometry(0.55, 1.8, 7, 1, true), mat, 0, 0.9, 0).material.side = THREE.DoubleSide;
   add(body, new THREE.SphereGeometry(0.33, 7, 5), mat, 0, 1.85, 0);
-  for (let i = 0; i < 3; i++) add(body, new THREE.ConeGeometry(0.1, 0.9, 4), mat, (i - 1) * 0.35, 0.05, -0.2).rotation.x = Math.PI;
-  const eye = glowMat(2.2, 4, 6);
+  // Tendrils hang from pivots at the hem so they can trail and wave.
+  const tendrils = [0, 1, 2].map((i) => {
+    const pivot = new THREE.Group();
+    pivot.position.set((i - 1) * 0.35, 0.45, -0.2);
+    body.add(pivot);
+    add(pivot, new THREE.ConeGeometry(0.1, 0.9, 4), mat, 0, -0.4, 0).rotation.x = Math.PI;
+    return pivot;
+  });
+  const eye = new THREE.MeshBasicMaterial({ color: new THREE.Color().setRGB(2.2, 4, 6), transparent: true });
   add(body, new THREE.SphereGeometry(0.06, 5, 4), eye, -0.11, 1.88, 0.28);
   add(body, new THREE.SphereGeometry(0.06, 5, 4), eye, 0.11, 1.88, 0.28);
-  return { group: g, mat, body };
+  return { group: g, mat, body, tendrils, eye };
 }
 
 class Enemy {
@@ -64,7 +72,11 @@ class Enemy {
     this.timer = 0;
     this.flash = 0;
     this.yaw = Math.random() * Math.PI * 2;
+    this.face = this.yaw; // rendered yaw, eased toward this.yaw
     this.seed = Math.random() * 10;
+    this.phase = 0; // walk cycle
+    this.moveAmt = 0;
+    this.lunge = 0; // 1 right after an attack lands, decays
     scene.add(this.group);
   }
 
@@ -77,6 +89,7 @@ class Enemy {
     const nx = this.x + (dx / d) * step, nz = this.z + (dz / d) * step;
     if (inBounds(nx, nz)) { this.x = nx; this.z = nz; }
     this.yaw = Math.atan2(dx, dz);
+    this.moved = true;
     return d;
   }
 }
@@ -89,6 +102,8 @@ export class Enemies {
     this.orbs = [];
     this.orbGeo = new THREE.OctahedronGeometry(0.14, 0);
     this.orbMat = glowMat(3.2, 2.3, 0.8);
+    this.ringGeo = new THREE.RingGeometry(0.8, 1, 32).rotateX(-Math.PI / 2);
+    this.fx = [];
   }
 
   get alive() { return this.list.filter((e) => e.alive).length; }
@@ -116,6 +131,8 @@ export class Enemies {
           e.timer -= dt;
           if (e.timer <= 0) {
             if (e.type === 'shade') e.moveToward(p.x, p.z, 30, 0.03); // lunge
+            else this.shockwave(e, dist, hooks);
+            e.lunge = 1;
             if (dist <= c.range + 0.7) hooks.onHitPlayer(c.dmg, e);
             e.state = 'recover';
             e.timer = c.recover;
@@ -130,12 +147,11 @@ export class Enemies {
           break;
         case 'dead':
           e.timer += dt;
-          e.group.scale.setScalar(Math.max(0.01, 1 - e.timer / 1.2));
-          e.group.position.y -= dt * 0.8;
-          e.group.rotation.z += dt * 2;
+          this.dying(e, dt);
           break;
       }
-      if (e.state !== 'dead') this.pose(e, t, dist);
+      if (e.state !== 'dead') this.pose(e, t, dt);
+      e.moved = false;
     }
 
     // Keep enemies from stacking on each other or the player.
@@ -150,26 +166,110 @@ export class Enemies {
       if (d < min && d > 1e-4) { a.x = p.x + (dx / d) * min; a.z = p.z + (dz / d) * min; }
     }
 
-    for (const e of this.list.filter((e) => e.state === 'dead' && e.timer > 1.2)) {
+    for (const e of this.list.filter((e) => e.state === 'dead' && e.timer > 1.8)) {
       this.scene.remove(e.group);
       this.list.splice(this.list.indexOf(e), 1);
     }
     this.updateOrbs(dt, p, hooks);
+    this.updateFx(dt);
   }
 
-  pose(e, t, dist) {
-    const y = groundAt(e.x, e.z);
-    e.group.position.set(e.x, y, e.z);
-    e.group.rotation.y = e.yaw;
+  pose(e, t, dt) {
+    e.group.position.set(e.x, groundAt(e.x, e.z), e.z);
+    const turn = Math.atan2(Math.sin(e.yaw - e.face), Math.cos(e.yaw - e.face));
+    e.face += turn * Math.min(1, dt * (e.type === 'golem' ? 5 : 9));
+    e.group.rotation.y = e.face;
+    e.moveAmt += ((e.moved ? 1 : 0) - e.moveAmt) * Math.min(1, dt * 8);
+    e.phase += dt * e.cfg.speed * 2.2 * e.moveAmt;
+    e.lunge = Math.max(0, e.lunge - dt * 3);
     const wind = e.state === 'windup' ? 1 - e.timer / e.cfg.windup : 0;
+    const mv = e.moveAmt, ph = e.phase, f = e.flash;
+    // Hit recoil: squash while the flash fades.
+    e.group.scale.set(1 + f * 0.12, 1 - f * 0.1, 1 + f * 0.12);
     if (e.type === 'golem') {
-      const walk = e.state === 'chase' || e.state === 'return' ? Math.sin(t * 5 + e.seed) * 0.4 : 0;
-      e.arms[0].rotation.x = walk - wind * 2.4;
-      e.arms[1].rotation.x = -walk - wind * 2.4;
-      e.group.rotation.z = Math.sin(t * 2.5 + e.seed) * (walk ? 0.05 : 0.01);
+      const step = Math.sin(ph);
+      e.legs.forEach((l, i) => {
+        const s = i ? -1 : 1;
+        l.position.z = s * step * 0.35 * mv;
+        l.position.y = 0.4 + Math.max(0, s * Math.cos(ph)) * 0.2 * mv;
+      });
+      const tremble = wind > 0.6 ? Math.sin(t * 60) * 0.03 : 0;
+      // Heavy footfalls: the torso drops on each step; arms rise overhead in the windup and slam down.
+      e.body.position.y = -Math.abs(Math.cos(ph)) * 0.12 * mv + wind * 0.15;
+      e.body.rotation.x = 0.1 * mv - wind * 0.3 + e.lunge * 0.45 - f * 0.25 + tremble;
+      e.body.rotation.z = step * 0.07 * mv + Math.sin(t * 1.3 + e.seed) * 0.015;
+      e.arms.forEach((a, i) => {
+        const s = i ? -1 : 1;
+        a.rotation.x = s * step * 0.45 * mv - wind * 2.8 + e.lunge * 1.2;
+        a.rotation.z = s * (0.1 + wind * 0.35);
+      });
     } else {
-      e.group.position.y += 0.5 + Math.sin(t * 2.2 + e.seed) * 0.2;
-      e.body.rotation.x = -wind * 0.6 + (e.state === 'chase' ? 0.3 : 0);
+      e.group.position.y += 0.5 + Math.sin(t * 2.2 + e.seed) * 0.2 - wind * 0.15;
+      const chase = e.state === 'chase' ? 1 : 0;
+      e.body.rotation.x = -wind * 0.7 + chase * 0.35 + e.lunge * 0.6 - f * 0.4;
+      e.body.scale.set(1 - wind * 0.15, 1 + wind * 0.25 - e.lunge * 0.15, 1 + e.lunge * 0.3);
+      e.tendrils.forEach((td, i) => {
+        td.rotation.x = 0.25 * (chase + mv) + Math.sin(t * 5 + i * 2 + e.seed) * 0.35;
+        td.rotation.z = Math.sin(t * 3.3 + i * 1.7) * 0.25;
+      });
+    }
+  }
+
+  // Golem slam: an expanding ring of light in front of it and a camera kick if the player is close.
+  shockwave(e, dist, hooks) {
+    const ring = new THREE.Mesh(this.ringGeo, new THREE.MeshBasicMaterial({
+      color: new THREE.Color().setRGB(3, 1.5, 0.5), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+    }));
+    const x = e.x + Math.sin(e.face) * 1.6, z = e.z + Math.cos(e.face) * 1.6;
+    ring.position.set(x, groundAt(x, z) + 0.15, z);
+    this.scene.add(ring);
+    this.fx.push({ mesh: ring, age: 0 });
+    hooks.onShake?.(Math.max(0, 0.5 - dist * 0.03));
+  }
+
+  // Golems crumble into tumbling rubble; shades stretch upward and fade out.
+  dying(e, dt) {
+    if (e.type === 'shade') {
+      const k = Math.min(1, e.timer / 1.2);
+      e.body.scale.set(1 - k * 0.7, 1 + k * 1.5, 1 - k * 0.7);
+      e.group.position.y += dt * 1.5;
+      e.mat.opacity = 0.92 * (1 - k);
+      e.eye.opacity = 1 - k;
+      return;
+    }
+    if (!e.debris) {
+      e.group.scale.setScalar(1);
+      e.group.updateMatrixWorld(true);
+      const parts = [];
+      e.group.traverse((o) => { if (o.isMesh) parts.push(o); });
+      e.debris = parts.map((o) => {
+        e.group.attach(o); // flatten the hierarchy so each piece flies on its own
+        const out = new THREE.Vector3(o.position.x, 0, o.position.z).normalize();
+        const v = 1 + Math.random() * 2;
+        return { o, vel: new THREE.Vector3(out.x * v, 2 + Math.random() * 3, out.z * v), spin: new THREE.Vector3().randomDirection().multiplyScalar(6) };
+      });
+    }
+    for (const d of e.debris) {
+      d.vel.y -= 14 * dt;
+      d.o.position.addScaledVector(d.vel, dt);
+      if (d.o.position.y < 0.25) { d.o.position.y = 0.25; d.vel.multiplyScalar(0.5); d.vel.y = Math.abs(d.vel.y) * 0.3; }
+      d.o.rotation.x += d.spin.x * dt;
+      d.o.rotation.z += d.spin.z * dt;
+    }
+    if (e.timer > 1.1) e.group.position.y -= dt * 1.5; // rubble sinks into the grass
+  }
+
+  updateFx(dt) {
+    for (const f of [...this.fx]) {
+      f.age += dt;
+      const k = f.age / 0.55;
+      f.mesh.scale.setScalar(0.5 + k * 4.5);
+      f.mesh.material.opacity = (1 - k) * 0.9;
+      if (k >= 1) {
+        this.scene.remove(f.mesh);
+        f.mesh.material.dispose();
+        this.fx.splice(this.fx.indexOf(f), 1);
+      }
     }
   }
 

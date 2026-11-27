@@ -11,7 +11,10 @@ export class ThirdPersonCamera {
     this.pitch = 0.16;
     this.dist = 7.5;
     this.target = null;
+    this.shake = 0;
   }
+
+  addShake(amount) { this.shake = Math.min(0.6, this.shake + amount); }
 
   rotate(dx, dy) {
     this.yaw -= dx * SENS;
@@ -28,5 +31,11 @@ export class ThirdPersonCamera {
     const y = Math.max(t.y + Math.sin(this.pitch) * this.dist, heightAt(x, z) + 0.6);
     this.camera.position.set(x, y, z);
     this.camera.lookAt(t);
+    if (this.shake > 0.001) {
+      const s = this.shake * this.shake;
+      this.camera.rotation.x += (Math.random() - 0.5) * s * 0.2;
+      this.camera.rotation.y += (Math.random() - 0.5) * s * 0.2;
+      this.shake *= Math.exp(-dt * 8);
+    }
   }
 }

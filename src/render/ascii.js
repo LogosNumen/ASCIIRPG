@@ -100,6 +100,7 @@ export class AsciiRenderer {
       enabled: true,
       cellSize: 6,
       renderScale: 1, // 3D scene resolution under the ASCII pass; lower it on slow GPUs
+      autoRes: true, // drop the 3D render scale automatically when frames run slow
       preset: 'valley',
       glyphs: GLYPH_PRESETS.valley,
       contrast: 1.3,
@@ -122,6 +123,8 @@ export class AsciiRenderer {
       minFilter: THREE.LinearMipmapLinearFilter,
     });
     this.atlasKey = '';
+    this.autoScale = 1;
+    this.win = { n: 0, t: 0 };
     const v = (value) => ({ value });
     this.material = new THREE.ShaderMaterial({
       uniforms: {
@@ -157,6 +160,18 @@ export class AsciiRenderer {
     u.uGlyphCount.value = count;
   }
 
+  // Dynamic resolution: if a 1.5 s window averages under 45 fps, render the 3D scene 15% smaller.
+  // shortcut: only steps down (floor 0.4); a reload or the debug panel restores it.
+  adapt(dt) {
+    if (!this.params.autoRes || dt > 0.25) return; // ignore tab-switch / shader-compile stalls
+    const w = this.win;
+    w.n++;
+    w.t += dt;
+    if (w.t < 1.5) return;
+    if (w.n / w.t < 45 && this.autoScale > 0.4) this.autoScale = Math.round((this.autoScale - 0.15) * 100) / 100;
+    this.win = { n: 0, t: 0 };
+  }
+
   setSize(w, h) {
     this.size = { w, h };
     this.renderer.setSize(w, h);
@@ -166,7 +181,7 @@ export class AsciiRenderer {
     const p = this.params;
     const u = this.material.uniforms;
     const pr = this.renderer.getPixelRatio();
-    const scale = p.enabled ? p.renderScale : 1;
+    const scale = p.enabled ? p.renderScale * (p.autoRes ? this.autoScale : 1) : 1;
     const rw = Math.max(1, Math.round(this.size.w * scale)), rh = Math.max(1, Math.round(this.size.h * scale));
     if (this.rt.width !== rw || this.rt.height !== rh) this.rt.setSize(rw, rh);
     shared.uPointScale.value = rh / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));

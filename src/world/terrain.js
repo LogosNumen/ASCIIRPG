@@ -68,8 +68,9 @@ export function createGrass(count, rand) {
       mvPosition = modelViewMatrix * mvPosition;
       gl_Position = projectionMatrix * mvPosition;`);
   };
-  const mesh = new THREE.InstancedMesh(bladeGeometry(), mat, count);
-  const m = new THREE.Object3D(), c = new THREE.Color();
+  // Blades are binned into 16 m tiles, one InstancedMesh each, so tiles off-screen are frustum-culled.
+  const TILE = 16, tiles = new Map();
+  const m = new THREE.Object3D();
   const deep = new THREE.Color(0x24502e), blue = new THREE.Color(0x2f6a62), pale = new THREE.Color(0x6f8f5c);
   let n = 0;
   for (let tries = 0; n < count && tries < count * 8; tries++) {
@@ -83,15 +84,22 @@ export function createGrass(count, rand) {
     const h = 0.4 + rand() * rand() * 0.85; // stays under the wanderer's shoulders
     m.scale.set(0.8 + rand() * 0.6, h, 1);
     m.updateMatrix();
-    mesh.setMatrixAt(n, m.matrix);
-    c.copy(deep).lerp(blue, rand() * 0.8);
+    const c = deep.clone().lerp(blue, rand() * 0.8);
     if (rand() < 0.12) c.lerp(pale, 0.6);
-    mesh.setColorAt(n, c);
+    const key = `${Math.floor(x / TILE)},${Math.floor(z / TILE)}`;
+    if (!tiles.has(key)) tiles.set(key, []);
+    tiles.get(key).push([m.matrix.clone(), c]);
     n++;
   }
-  mesh.count = n;
-  mesh.computeBoundingSphere();
-  return mesh;
+  const geo = bladeGeometry(), group = new THREE.Group();
+  for (const list of tiles.values()) {
+    const mesh = new THREE.InstancedMesh(geo, mat, list.length);
+    list.forEach(([mx, c], i) => { mesh.setMatrixAt(i, mx); mesh.setColorAt(i, c); });
+    mesh.computeBoundingSphere();
+    mesh.boundingSphere.radius += 0.5; // wind sway
+    group.add(mesh);
+  }
+  return group;
 }
 
 export function createRocks(rand) {

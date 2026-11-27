@@ -10,6 +10,8 @@ export function createDebug(ascii, scene, { onResetSave } = {}) {
   gui.add(p, 'enabled').name('ASCII pass');
   gui.add(p, 'cellSize', 3, 24, 1).name('cell size (px)');
   gui.add(p, 'renderScale', 0.25, 1, 0.05).name('3D render scale');
+  gui.add(p, 'autoRes').name('auto resolution').onChange(() => { ascii.autoScale = 1; });
+  gui.add(ascii, 'autoScale').name('auto scale now').listen().disable();
   gui.add(p, 'preset', Object.keys(GLYPH_PRESETS)).name('glyph preset').onChange((v) => {
     p.glyphs = GLYPH_PRESETS[v];
     ascii.setGlyphs(p.glyphs);
@@ -28,6 +30,8 @@ export function createDebug(ascii, scene, { onResetSave } = {}) {
   gui.add(p, 'glow', 0, 1.5, 0.01);
   if (scene.fog) gui.add(scene.fog, 'density', 0, 0.05, 0.0005).name('fog density');
   gui.add(stats, 'fps').listen().disable();
+  const gl = ascii.renderer.getContext(), info = gl.getExtension('WEBGL_debug_renderer_info');
+  gui.add({ gpu: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : 'unknown' }, 'gpu').disable();
   if (onResetSave) gui.add({ reset: onResetSave }, 'reset').name('reset save + reload');
   gui.hide();
 
