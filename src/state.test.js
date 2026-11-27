@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { newState, addXp, xpToNext, save, load } from './state.js';
+import { newState, addXp, xpToNext, save, load, KEY } from './state.js';
 
 const memStorage = () => {
   const m = new Map();
@@ -24,7 +24,7 @@ test('addXp can gain several levels at once', () => {
 test('save/load round-trips', () => {
   const st = memStorage();
   const s = newState();
-  Object.assign(s, { level: 3, xp: 7, quest: 2, killed: ['shade1'], pos: { x: 1.5, z: -3 } });
+  Object.assign(s, { level: 3, xp: 7, quest: 5, killed: ['shade1'], lit: ['east'], flasks: 1, pos: { x: 301, z: -3 } });
   save(s, st);
   assert.deepEqual(load(st), s);
 });
@@ -32,9 +32,9 @@ test('save/load round-trips', () => {
 test('load rejects or sanitises bad data', () => {
   const st = memStorage();
   assert.equal(load(st), null);
-  st.setItem('mistfall-save-v1', '{not json');
+  st.setItem(KEY, '{not json');
   assert.equal(load(st), null);
-  st.setItem('mistfall-save-v1', JSON.stringify({ level: -4, hp: 'x', quest: 99, killed: [1, 'golem1'], pos: { x: 'a' } }));
+  st.setItem(KEY, JSON.stringify({ level: -4, hp: 'x', quest: 99, killed: [1, 'golem1'], lit: 'east', flasks: 40, pos: { x: 'a' } }));
   const s = load(st);
-  assert.deepEqual([s.level, s.hp, s.quest, s.killed, s.pos], [1, 100, 3, ['golem1'], null]);
+  assert.deepEqual([s.level, s.hp, s.quest, s.killed, s.lit, s.flasks, s.pos], [1, 100, 7, ['golem1'], [], 3, null]);
 });

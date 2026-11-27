@@ -39,6 +39,19 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #05070a; }
 }
 .overlay button:hover, .overlay button:focus-visible { color: #fff; outline: 1px dashed #ffd9a0; }
 
+.floats { position: absolute; inset: 0; overflow: hidden; }
+.float, .tag { position: absolute; left: 0; top: 0; white-space: pre; will-change: transform; }
+.float { font-size: 15px; font-weight: bold; color: #f2f6ff; }
+.float.big { font-size: 21px; color: #ffd27a; text-shadow: 0 0 10px rgba(255, 180, 80, 0.8); }
+.float.hurt { color: #ff6a5a; }
+.float.heal { color: #7dffb0; }
+.float.parry { color: #b9a8ff; }
+.tag { font-size: 10px; color: #ff6a5a; }
+.boss { left: 50%; bottom: 24px; transform: translateX(-50%); color: #ff8a6a; }
+.perf { position: absolute; left: 16px; bottom: 12px; color: #7f93a8; font-size: 11px; white-space: pre; }
+.overlay .gpu { margin: 4px 0 0; color: #4f6276; font-size: 11px; }
+.overlay .warn { max-width: 520px; margin: 6px 0 0; color: #ffb36a; white-space: normal; }
+
 @media (max-width: 640px) {
   #ui { font-size: 10px; }
   .overlay .title { font-size: 10px; }

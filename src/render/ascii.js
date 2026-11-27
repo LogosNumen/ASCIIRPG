@@ -12,6 +12,12 @@ export const GLYPH_PRESETS = {
 
 const CELL_ASPECT = 1.5;
 
+// The real GPU name when the browser exposes it, else ''.
+export function gpuName(renderer) {
+  const gl = renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info');
+  return ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : '';
+}
+
 // Atlas tiles are exactly one cell in device pixels, so glyphs are drawn by the browser's text
 // rasteriser at their final size and fetched texel-for-texel: crisp, no resampling blur.
 function buildAtlas(chars, tw, th) {

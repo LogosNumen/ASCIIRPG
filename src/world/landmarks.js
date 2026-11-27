@@ -96,10 +96,51 @@ export function createCave() {
   g.add(light);
   return {
     group: g,
-    update(t, open) {
-      const target = open ? 0.35 + Math.sin(t * 2) * 0.1 : 0;
+    // mode: 0 dormant, 1 sealed (amber wards), 2 open (pale blue)
+    update(t, mode) {
+      const target = mode ? 0.35 + Math.sin(t * 2) * 0.1 : 0;
       veil.material.opacity += (target - veil.material.opacity) * 0.05;
+      veil.material.color.setRGB(...(mode === 1 ? [1.6, 0.7, 0.25] : [0.6, 0.9, 1.6]));
+      light.color.set(mode === 1 ? 0xffa060 : 0x7fc4ff);
       light.intensity = veil.material.opacity * 120;
+    },
+  };
+}
+
+// Waystones: rune-carved obelisks; kindled ones burn with a pillar of pale fire.
+export function createWaystones(stones) {
+  const group = new THREE.Group();
+  const geo = new THREE.CylinderGeometry(0.35, 0.6, 3.2, 4);
+  const runeGeo = new THREE.BoxGeometry(0.12, 1.6, 0.12);
+  const beamGeo = new THREE.CylinderGeometry(0.25, 0.6, 14, 8, 1, true);
+  const list = stones.map((s) => {
+    const g = new THREE.Group();
+    g.position.set(s.x, heightAt(s.x, s.z), s.z);
+    const pillar = mesh(geo, stone, 0, 1.5, 0, g);
+    pillar.rotation.y = Math.PI / 4;
+    const rune = mesh(runeGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color().setRGB(0.08, 0.1, 0.14) }), 0, 1.6, 0.36, g);
+    const beam = mesh(beamGeo, new THREE.MeshBasicMaterial({
+      color: new THREE.Color().setRGB(0.5, 0.9, 1.6), transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+    }), 0, 9, 0, g);
+    beam.visible = false;
+    group.add(g);
+    return {
+      ...s,
+      lit: false,
+      setLit(on) {
+        this.lit = on;
+        rune.material.color.setRGB(...(on ? [1.6, 3.2, 4.5] : [0.08, 0.1, 0.14]));
+        beam.visible = on;
+      },
+      beam,
+    };
+  });
+  return {
+    group,
+    list,
+    colliders: stones.map((s) => ({ x: s.x, z: s.z, r: 0.7 })),
+    update(t) {
+      for (const w of list) if (w.lit) w.beam.material.opacity = 0.25 + Math.sin(t * 2 + w.x) * 0.08;
     },
   };
 }

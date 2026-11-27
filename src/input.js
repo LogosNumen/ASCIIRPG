@@ -5,17 +5,20 @@ export function createInput(canvas) {
     dx: 0,
     dy: 0,
     attack: false,
+    heavy: false,
+    heal: false,
     jump: false,
     interact: false,
     locked: false,
     endFrame() {
       input.dx = input.dy = 0;
-      input.attack = input.jump = input.interact = false;
+      input.attack = input.heavy = input.heal = input.jump = input.interact = false;
     },
   };
   addEventListener('keydown', (e) => {
     if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) input.jump = true; }
     if (e.code === 'KeyE' && !e.repeat) input.interact = true;
+    if (e.code === 'KeyQ' && !e.repeat) input.heal = true;
     input.keys.add(e.code);
   });
   addEventListener('keyup', (e) => input.keys.delete(e.code));
@@ -27,7 +30,9 @@ export function createInput(canvas) {
   });
   addEventListener('mousedown', (e) => {
     if (input.locked && e.button === 0) input.attack = true;
+    if (input.locked && e.button === 2) input.heavy = true;
   });
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   document.addEventListener('pointerlockchange', () => {
     input.locked = document.pointerLockElement === canvas;
     if (!input.locked) input.keys.clear();

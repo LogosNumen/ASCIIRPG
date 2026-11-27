@@ -1,5 +1,5 @@
 import GUI from 'lil-gui';
-import { GLYPH_PRESETS } from './render/ascii.js';
+import { GLYPH_PRESETS, gpuName } from './render/ascii.js';
 
 // Live tuning panel for the ASCII pass, hidden until toggled with G.
 export function createDebug(ascii, scene, { onResetSave } = {}) {
@@ -30,8 +30,7 @@ export function createDebug(ascii, scene, { onResetSave } = {}) {
   gui.add(p, 'glow', 0, 1.5, 0.01);
   if (scene.fog) gui.add(scene.fog, 'density', 0, 0.05, 0.0005).name('fog density');
   gui.add(stats, 'fps').listen().disable();
-  const gl = ascii.renderer.getContext(), info = gl.getExtension('WEBGL_debug_renderer_info');
-  gui.add({ gpu: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : 'unknown' }, 'gpu').disable();
+  gui.add({ gpu: gpuName(ascii.renderer) || 'unknown' }, 'gpu').disable();
   if (onResetSave) gui.add({ reset: onResetSave }, 'reset').name('reset save + reload');
   gui.hide();
 

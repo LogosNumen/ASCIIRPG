@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { rng } from './noise.js';
-import { heightAt, POOL, inBounds } from './layout.js';
+import { heightAt, POOL, inBounds, WAYSTONES } from './layout.js';
 import { createTerrain, createGrass, createRocks } from './terrain.js';
 import { createWaterfall } from './waterfall.js';
-import { createShrine, createNpc, createCave } from './landmarks.js';
+import { createShrine, createNpc, createCave, createWaystones } from './landmarks.js';
+import { createCavern } from './cavern.js';
 import { fireflies, ballistic } from '../render/particles.js';
 
 const SKY_FRAG = /* glsl */ `
@@ -17,7 +18,7 @@ void main() {
   gl_FragColor = vec4(mix(horizon, zenith, smoothstep(0.0, 0.55, d.y)), 1.0);
 }`;
 
-export function createWorld(scene) {
+export function createWorld(scene, { grass = 70000 } = {}) {
   const rand = rng(7);
   const horizon = new THREE.Color().setRGB(0.03, 0.04, 0.06);
   scene.fog = new THREE.FogExp2(horizon.clone(), 0.0105);
@@ -41,21 +42,29 @@ export function createWorld(scene) {
     new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(starPos, 3)),
     new THREE.PointsMaterial({ color: 0xb8c8e8, size: 1.6, sizeAttenuation: false, fog: false }),
   );
-  scene.add(sky, moon, stars);
+  // Everything in the valley lives in one group so it can be hidden while in the cavern.
+  const valley = new THREE.Group();
+  scene.add(valley);
+  valley.add(sky, moon, stars);
 
-  scene.add(new THREE.HemisphereLight(0x8aa2c8, 0x1a2a1c, 0.9));
+  const hemi = new THREE.HemisphereLight(0x8aa2c8, 0x1a2a1c, 0.9);
+  scene.add(hemi);
   const moonLight = new THREE.DirectionalLight(0xaec4e8, 2.6);
   moonLight.position.set(-50, 55, 10);
   const fill = new THREE.DirectionalLight(0x5a6a88, 0.7);
   fill.position.set(30, 25, 60);
   scene.add(moonLight, fill);
 
-  scene.add(createTerrain(), createGrass(70000, rand), createRocks(rand));
+  valley.add(createTerrain(), createGrass(grass, rand), createRocks(rand));
   const falls = createWaterfall(rand);
   const shrine = createShrine();
   const npc = createNpc();
   const cave = createCave();
-  scene.add(falls.group, shrine.group, npc.group, cave.group);
+  const stones = createWaystones(WAYSTONES);
+  valley.add(falls.group, shrine.group, npc.group, cave.group, stones.group);
+  const cavern = createCavern(rand);
+  cavern.group.visible = false;
+  scene.add(cavern.group);
 
   const ff = [];
   while (ff.length < 320 * 3) {
@@ -65,20 +74,36 @@ export function createWorld(scene) {
     if (!inBounds(x, z) || heightAt(x, z) > 3) continue;
     ff.push(x, Math.max(heightAt(x, z), -0.4) + 0.4 + rand() * 2.2, z);
   }
-  scene.add(fireflies(ff, rand));
+  valley.add(fireflies(ff, rand));
   // Low valley mist drifting across the meadow.
-  scene.add(ballistic(380, (rnd) => [
+  valley.add(ballistic(380, (rnd) => [
     -30 + rnd() * 60, heightAt(0, 0) + 0.3 + rnd() * 2, -40 + rnd() * 95,
     0.2 + rnd() * 0.5, 0, (rnd() - 0.5) * 0.3, 14 + rnd() * 10, 0, 9 + rnd() * 9,
   ], rand, { color: [0.45, 0.55, 0.7], opacity: 0.016 }));
 
+  const valleyFog = new THREE.Color().copy(horizon), cavernFog = new THREE.Color().setRGB(0.012, 0.016, 0.026);
   return {
-    colliders: [...shrine.colliders, npc.collider],
+    colliders: [...shrine.colliders, npc.collider, ...stones.colliders],
     impact: falls.impact,
-    update(t, caveOpen) {
+    waystones: stones.list,
+    zone: 'valley',
+    setZone(zone) {
+      this.zone = zone;
+      const inCave = zone === 'cavern';
+      valley.visible = !inCave;
+      cavern.group.visible = inCave;
+      scene.fog.color.copy(inCave ? cavernFog : valleyFog);
+      scene.background.copy(scene.fog.color);
+      hemi.intensity = inCave ? 0.6 : 0.9;
+      moonLight.intensity = inCave ? 1.2 : 2.6;
+    },
+    // caveMode: 0 dormant, 1 sealed, 2 open
+    update(t, caveMode, exitOpen) {
+      if (this.zone === 'cavern') { cavern.update(t, exitOpen); return; }
       shrine.update(t);
       npc.update(t);
-      cave.update(t, caveOpen);
+      cave.update(t, caveMode);
+      stones.update(t);
     },
   };
 }

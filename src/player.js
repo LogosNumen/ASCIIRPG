@@ -52,9 +52,10 @@ function buildModel() {
 const easeOut = (x) => 1 - (1 - x) ** 3;
 const ease = (x) => x * x * (3 - 2 * x);
 const clamp01 = (x) => Math.min(1, Math.max(0, x));
-// Sword pose [pitch, yaw] at rest, cocked back, and fully swung (mirrored for the backhand).
+// Sword pose [pitch, yaw] at rest; swings go rest -> cocked -> swung -> rest (mirrored for the backhand).
 const REST = [-0.5, 0.2];
 const SWING = { windup: 0.07, slash: 0.17, end: 0.34 };
+const SPIN = { windup: 0.28, spin: 0.28, end: 0.78 };
 
 export class Player {
   constructor(scene) {
@@ -70,8 +71,16 @@ export class Player {
     this.dodgeT = 0;
     this.dodgeDir = [0, 0];
     this.invuln = 0;
-    this.attackT = -1;
+    this.attackT = -1; // sword swing clock, -1 when idle
     this.attackCd = 0;
+    this.queued = 0; // buffered attack click
+    this.combo = 0; // 0, 1, 2 (finisher)
+    this.comboT = 0; // window to chain the next swing after one ends
+    this.swingScale = 1;
+    this.spinT = -1; // heavy spin clock
+    this.spinCd = 0;
+    this.drinkT = -1;
+    this.knock = [0, 0];
     this.walk = 0;
     this.moveAmt = 0;
     this.squash = 0; // >0 squashed, <0 stretched
@@ -79,13 +88,27 @@ export class Player {
     this.side = 1; // alternates forehand / backhand swings
   }
 
+  get pos() { return this.mesh.position; }
+  get busy() { return (this.attackT >= 0 && this.attackT / this.swingScale < SWING.slash) || this.spinT >= 0 || this.drinkT >= 0; }
+
   hurt() { this.hurtT = 0.3; }
 
-  get pos() { return this.mesh.position; }
+  knockFrom(x, z, strength) {
+    const dx = this.pos.x - x, dz = this.pos.z - z, d = Math.hypot(dx, dz) || 1;
+    this.knock = [(dx / d) * strength, (dz / d) * strength];
+  }
+
+  // Starts the drinking animation; the caller applies the heal. Returns false if mid-action.
+  drink() {
+    if (this.busy || this.attackT >= 0) return false;
+    this.drinkT = 0;
+    return true;
+  }
 
   teleport(x, z) {
     this.pos.set(x, groundAt(x, z), z);
     this.vy = 0;
+    this.knock = [0, 0];
   }
 
   tryMove(dx, dz) {
@@ -96,12 +119,15 @@ export class Player {
     if (ok(p.x, p.z + dz)) p.z += dz;
   }
 
-  // Returns a strike {x, z, dirX, dirZ} on the frame the swing connects, else null.
+  // Returns a strike {x, z, dirX, dirZ, mult, range, arc, knock, heavy} on the frame a swing connects, else null.
   update(dt, input, camYaw, colliders) {
     const p = this.pos;
     this.invuln = Math.max(0, this.invuln - dt);
     this.attackCd = Math.max(0, this.attackCd - dt);
+    this.spinCd = Math.max(0, this.spinCd - dt);
     this.dodgeT = Math.max(0, this.dodgeT - dt);
+    this.comboT = Math.max(0, this.comboT - dt);
+    this.queued = input.attack ? 0.3 : Math.max(0, this.queued - dt);
 
     const k = input.keys;
     const f = (k.has('KeyW') ? 1 : 0) - (k.has('KeyS') ? 1 : 0);
@@ -110,21 +136,28 @@ export class Player {
     let mx = fx * f + Math.cos(camYaw) * r, mz = fz * f - Math.sin(camYaw) * r;
     const len = Math.hypot(mx, mz);
     if (len > 0) { mx /= len; mz /= len; }
+    const aim = () => { if (len === 0) this.facing = Math.atan2(fx, fz); }; // idle attacks go where the camera looks
 
-    if (input.jump && this.grounded) {
+    // Dodge cancels a sword swing, but not a spin or a drink.
+    if (input.jump && this.grounded && this.spinT < 0 && this.drinkT < 0) {
       this.vy = 8;
       this.grounded = false;
       this.squash = -0.22;
       this.invuln = Math.max(this.invuln, 0.4);
-      if (len > 0) { this.dodgeT = 0.3; this.dodgeDir = [mx, mz]; }
+      if (len > 0) { this.dodgeT = 0.3; this.dodgeDir = [mx, mz]; this.attackT = -1; }
     }
 
-    let speed = SPEED * (this.attackT >= 0 ? 0.35 : 1);
+    let speed = SPEED * (this.spinT >= 0 ? 0.25 : this.drinkT >= 0 ? 0.4 : this.attackT >= 0 ? 0.35 : 1);
     if (this.dodgeT > 0) { [mx, mz] = this.dodgeDir; speed = SPEED * 2.3; }
     const moving = len > 0 || this.dodgeT > 0;
     if (moving) {
       this.tryMove(mx * speed * dt, mz * speed * dt);
-      if (this.attackT < 0) this.turnTo(Math.atan2(mx, mz), dt);
+      if (this.attackT < 0 && this.spinT < 0) this.turnTo(Math.atan2(mx, mz), dt);
+    }
+    if (this.knock[0] || this.knock[1]) {
+      this.tryMove(this.knock[0] * dt, this.knock[1] * dt);
+      const decay = Math.exp(-dt * 8);
+      this.knock = Math.hypot(...this.knock) < 0.05 ? [0, 0] : [this.knock[0] * decay, this.knock[1] * decay];
     }
     for (const c of colliders) {
       const dx = p.x - c.x, dz = p.z - c.z, d = Math.hypot(dx, dz), min = c.r + 0.45;
@@ -142,21 +175,50 @@ export class Player {
     } else this.grounded = false;
 
     let strike = null;
-    if (input.attack && this.attackCd <= 0) {
+    const dir = () => ({ x: p.x, z: p.z, dirX: Math.sin(this.facing), dirZ: Math.cos(this.facing) });
+
+    // Combo: a click buffered during a swing chains into the next one once the slash has landed.
+    if (this.queued > 0 && !this.busy && this.attackCd <= 0 && this.dodgeT <= 0) {
+      this.combo = this.attackT >= 0 || this.comboT > 0 ? (this.combo + 1) % 3 : 0;
+      this.swingScale = this.combo === 2 ? 1.35 : 1;
       this.attackT = 0;
-      this.attackCd = 0.42;
+      this.attackCd = 0.1;
+      this.queued = 0;
       this.side = -this.side;
       this.struck = false;
-      if (len === 0) this.facing = Math.atan2(fx, fz); // idle swings go where the camera looks
+      aim();
     }
     if (this.attackT >= 0) {
       this.attackT += dt;
-      if (!this.struck && this.attackT >= SWING.windup + 0.04) {
+      const t = this.attackT / this.swingScale;
+      if (!this.struck && t >= SWING.windup + 0.04) {
         this.struck = true;
-        strike = { x: p.x, z: p.z, dirX: Math.sin(this.facing), dirZ: Math.cos(this.facing) };
+        const fin = this.combo === 2;
+        if (fin) this.tryMove(Math.sin(this.facing) * 0.7, Math.cos(this.facing) * 0.7); // finisher lunge
+        strike = { ...dir(), mult: fin ? 1.7 : 1, range: fin ? 3.1 : 2.6, arc: fin ? -0.15 : 0.3, knock: fin ? 2.5 : 1, heavy: fin };
       }
-      if (this.attackT > SWING.end) this.attackT = -1;
+      if (t > SWING.end) { this.attackT = -1; this.comboT = this.combo === 2 ? 0 : 0.45; }
     }
+
+    // Heavy: crouch, then a full spin that hits everything around.
+    if (input.heavy && !this.busy && this.spinCd <= 0 && this.grounded) {
+      this.spinT = 0;
+      this.spinCd = 1.3;
+      this.attackT = -1;
+      this.combo = 0;
+      this.spunHit = false;
+      aim();
+    }
+    if (this.spinT >= 0) {
+      this.spinT += dt;
+      if (!this.spunHit && this.spinT >= SPIN.windup + 0.06) {
+        this.spunHit = true;
+        strike = { ...dir(), mult: 2.2, range: 3.4, arc: -1.01, knock: 3, heavy: true };
+      }
+      if (this.spinT > SPIN.end) this.spinT = -1;
+    }
+
+    if (this.drinkT >= 0 && (this.drinkT += dt) > 0.7) this.drinkT = -1;
     this.animate(dt, moving);
     return strike;
   }
@@ -179,12 +241,14 @@ export class Player {
 
     // Squash/stretch springs back to neutral; keep the volume roughly constant.
     this.squash *= Math.exp(-dt * 9);
-    const sq = this.squash + (1 - mv) * Math.sin(idle * 2.2) * 0.012;
+    const crouch = this.spinT >= 0 && this.spinT < SPIN.windup ? ease(this.spinT / SPIN.windup) * 0.18 : 0;
+    const sq = this.squash + crouch + (1 - mv) * Math.sin(idle * 2.2) * 0.012;
     m.rig.scale.set(1 + sq * 0.5, 1 - sq, 1 + sq * 0.5);
     m.rig.position.y = HIP + Math.abs(Math.sin(ph)) * 0.09 * mv;
-    m.rig.rotation.x = 0.16 * mv - this.hurtT * 1.2 + (dodge ? ease(dodge) * Math.PI * 2 : 0);
+    const drink = this.drinkT >= 0 ? Math.sin(Math.min(1, this.drinkT / 0.7) * Math.PI) : 0;
+    m.rig.rotation.x = 0.16 * mv - this.hurtT * 1.2 + (dodge ? ease(dodge) * Math.PI * 2 : 0) - drink * 0.15 + crouch;
     m.rig.rotation.z = Math.sin(ph) * 0.05 * mv;
-    m.hood.rotation.x = -0.1 * mv + Math.sin(ph * 2) * 0.03 * mv;
+    m.hood.rotation.x = -0.1 * mv + Math.sin(ph * 2) * 0.03 * mv - drink * 0.6;
     m.cloak.rotation.x = -0.12 * mv; // hem trails behind
     m.cloak.scale.set(1 + 0.05 * mv, 1, 1 + 0.05 * mv);
     m.feet.forEach((f, i) => {
@@ -192,38 +256,58 @@ export class Player {
       f.position.z = 0.05 + s * 0.24 * mv;
       f.position.y = 0.06 + Math.max(0, Math.cos(ph + i * Math.PI)) * 0.12 * mv;
     });
-    m.scarf.rotation.x = 0.35 + 0.6 * this.moveAmt + Math.sin(ph * 1.3) * (0.1 + 0.15 * this.moveAmt);
+    const spinning = this.spinT >= SPIN.windup ? 1 : 0;
+    m.scarf.rotation.x = 0.35 + 0.6 * Math.max(this.moveAmt, spinning) + Math.sin(ph * 1.3) * (0.1 + 0.15 * this.moveAmt);
     m.scarf.rotation.z = Math.sin(ph * 0.9) * 0.15 * this.moveAmt;
 
-    const t = this.attackT, side = this.side;
-    if (t >= 0) {
+    m.rig.position.z = 0;
+    m.rig.rotation.y = 0;
+    m.slash.material.opacity = 0;
+    m.slash.rotation.y = 0;
+    m.slash.scale.set(1, 1, 1);
+    m.swordPivot.rotation.set(REST[0] + Math.sin(ph) * 0.12 * mv, REST[1], 0);
+
+    const side = this.side;
+    if (this.attackT >= 0) {
       // windup -> fast slash -> follow-through and recover, with a body twist and small lunge.
-      const cocked = [-0.1, 1.7 * side], swung = [0.15, -1.5 * side];
+      const t = this.attackT / this.swingScale, fin = this.combo === 2 ? 1.25 : 1;
+      const cocked = [-0.1, 1.7 * side * fin], swung = [0.15, -1.5 * side * fin];
       let pose, twist;
       if (t < SWING.windup) {
         const k = ease(t / SWING.windup);
         pose = [REST[0] + (cocked[0] - REST[0]) * k, REST[1] + (cocked[1] - REST[1]) * k];
-        twist = 0.35 * side * k;
+        twist = 0.35 * side * k * fin;
       } else if (t < SWING.slash) {
         const k = easeOut((t - SWING.windup) / (SWING.slash - SWING.windup));
         pose = [cocked[0] + (swung[0] - cocked[0]) * k, cocked[1] + (swung[1] - cocked[1]) * k];
-        twist = 0.35 * side - 0.75 * side * k;
+        twist = (0.35 * side - 0.75 * side * k) * fin;
       } else {
         const k = ease((t - SWING.slash) / (SWING.end - SWING.slash));
         pose = [swung[0] + (REST[0] - swung[0]) * k, swung[1] + (REST[1] - swung[1]) * k];
-        twist = -0.4 * side * (1 - k);
+        twist = -0.4 * side * (1 - k) * fin;
       }
       m.swordPivot.rotation.set(pose[0], pose[1], side * 0.3);
       m.rig.rotation.y = twist;
-      m.rig.position.z = Math.sin(clamp01((t - SWING.windup) / 0.2) * Math.PI) * 0.25;
+      m.rig.position.z = Math.sin(clamp01((t - SWING.windup) / 0.2) * Math.PI) * 0.25 * fin;
       const lit = clamp01((t - SWING.windup) / 0.03) * (1 - clamp01((t - SWING.slash) / 0.15));
       m.slash.material.opacity = lit * 0.9;
-      m.slash.scale.x = side;
-    } else {
-      m.swordPivot.rotation.set(REST[0] + Math.sin(ph) * 0.12 * mv, REST[1], 0);
-      m.rig.rotation.y = 0;
-      m.rig.position.z = 0;
-      m.slash.material.opacity = 0;
+      m.slash.scale.set(side * fin * 1.1, 1, fin * 1.1);
+    } else if (this.spinT >= 0) {
+      const t = this.spinT;
+      if (t < SPIN.windup) {
+        const k = ease(t / SPIN.windup);
+        m.swordPivot.rotation.set(-0.1, REST[1] + (1.6 - REST[1]) * k, 0.3);
+        m.rig.rotation.y = 0.6 * k;
+      } else {
+        const k = easeOut(clamp01((t - SPIN.windup) / SPIN.spin));
+        m.swordPivot.rotation.set(0, 1.6, 0.3);
+        m.rig.rotation.y = 0.6 - k * (Math.PI * 2 + 0.6);
+        m.slash.rotation.y = m.rig.rotation.y + 1.6;
+        m.slash.scale.set(1.3, 1, 1.3);
+        m.slash.material.opacity = (1 - clamp01((t - SPIN.windup - SPIN.spin) / 0.2)) * 0.9 * clamp01((t - SPIN.windup) / 0.04);
+      }
+    } else if (this.drinkT >= 0) {
+      m.swordPivot.rotation.set(0.6, 0.2, 0);
     }
     this.mesh.visible = this.invuln <= 0 || this.dodgeT > 0 || Math.floor(this.invuln * 20) % 2 === 0;
   }
